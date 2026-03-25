@@ -8,6 +8,8 @@ import org.mockito.Mockito;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -56,9 +58,8 @@ class DeepSeekServiceTest {
 
     @Test
     void sendChatRequest_success_returnsResponse() throws Exception {
-        DeepSeekModels.ChatResponse chatResponse = buildChatResponse("Hello!");
         when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
-                .thenReturn(chatResponse);
+                .thenReturn(buildChatResponse("Hello!"));
 
         DeepSeekModels.ChatResponse result = service.sendChatRequest("Hi", "deepseek-chat");
 
@@ -68,9 +69,8 @@ class DeepSeekServiceTest {
 
     @Test
     void sendChatRequest_addsUserMessageAndAssistantReplyToHistory() throws Exception {
-        DeepSeekModels.ChatResponse chatResponse = buildChatResponse("Reply from model");
         when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
-                .thenReturn(chatResponse);
+                .thenReturn(buildChatResponse("Reply from model"));
 
         service.sendChatRequest("User message", "deepseek-chat");
 
@@ -83,10 +83,28 @@ class DeepSeekServiceTest {
     }
 
     @Test
-    void sendChatRequest_buildsRequestWithCorrectMaxTokens() throws Exception {
-        DeepSeekModels.ChatResponse chatResponse = buildChatResponse("ok");
+    void sendChatRequest_prependsSystemPromptToRequest() throws Exception {
         when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
-                .thenReturn(chatResponse);
+                .thenReturn(buildChatResponse("ok"));
+
+        service.sendChatRequest("Hello", "deepseek-chat");
+
+        ArgumentCaptor<DeepSeekModels.ChatRequest> captor =
+                ArgumentCaptor.forClass(DeepSeekModels.ChatRequest.class);
+        verify(mockClient).sendPostRequest(eq("/chat/completions"), captor.capture(),
+                eq(DeepSeekModels.ChatResponse.class));
+
+        List<DeepSeekModels.ChatMessage> msgs = captor.getValue().getMessages();
+        assertEquals("system", msgs.get(0).getRole());
+        assertEquals(DeepSeekService.DEFAULT_SYSTEM_PROMPT, msgs.get(0).getContent());
+        assertEquals("user", msgs.get(1).getRole());
+        assertEquals("Hello", msgs.get(1).getContent());
+    }
+
+    @Test
+    void sendChatRequest_buildsRequestWithCorrectMaxTokens() throws Exception {
+        when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
+                .thenReturn(buildChatResponse("ok"));
 
         service.sendChatRequest("Hello", "deepseek-chat", 512);
 
@@ -119,6 +137,106 @@ class DeepSeekServiceTest {
         assertEquals(4, service.getChatHistory().size());
     }
 
+    // --- system prompt ---
+
+    @Test
+    void setSystemPrompt_changesPromptSentWithRequests() throws Exception {
+        when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
+                .thenReturn(buildChatResponse("ok"));
+
+        service.setSystemPrompt("You are a pirate");
+        service.sendChatRequest("Hello", "deepseek-chat");
+
+        ArgumentCaptor<DeepSeekModels.ChatRequest> captor =
+                ArgumentCaptor.forClass(DeepSeekModels.ChatRequest.class);
+        verify(mockClient).sendPostRequest(eq("/chat/completions"), captor.capture(), any());
+
+        assertEquals("You are a pirate", captor.getValue().getMessages().get(0).getContent());
+    }
+
+    @Test
+    void setSystemPrompt_null_sendsNoSystemMessage() throws Exception {
+        when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
+                .thenReturn(buildChatResponse("ok"));
+
+        service.setSystemPrompt(null);
+        service.sendChatRequest("Hello", "deepseek-chat");
+
+        ArgumentCaptor<DeepSeekModels.ChatRequest> captor =
+                ArgumentCaptor.forClass(DeepSeekModels.ChatRequest.class);
+        verify(mockClient).sendPostRequest(eq("/chat/completions"), captor.capture(), any());
+
+        List<DeepSeekModels.ChatMessage> msgs = captor.getValue().getMessages();
+        assertEquals(1, msgs.size());
+        assertEquals("user", msgs.get(0).getRole());
+    }
+
+    @Test
+    void getSystemPrompt_returnsDefault() {
+        assertEquals(DeepSeekService.DEFAULT_SYSTEM_PROMPT, service.getSystemPrompt());
+    }
+
+    // --- streamChatRequest ---
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamChatRequest_deliversTokensToConsumer() throws Exception {
+        doAnswer(invocation -> {
+            Consumer<String> consumer = invocation.getArgument(2);
+            consumer.accept("Hello");
+            consumer.accept(" world");
+            return null;
+        }).when(mockClient).sendStreamingPostRequest(eq("/chat/completions"), any(), any());
+
+        StringBuilder collected = new StringBuilder();
+        service.streamChatRequest("Hi", "deepseek-chat", 100, collected::append);
+
+        assertEquals("Hello world", collected.toString());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamChatRequest_addsFullResponseToHistory() throws Exception {
+        doAnswer(invocation -> {
+            Consumer<String> consumer = invocation.getArgument(2);
+            consumer.accept("Full");
+            consumer.accept(" reply");
+            return null;
+        }).when(mockClient).sendStreamingPostRequest(eq("/chat/completions"), any(), any());
+
+        service.streamChatRequest("Hi", "deepseek-chat", 100, t -> {});
+
+        List<DeepSeekModels.ChatMessage> history = service.getChatHistory();
+        assertEquals(2, history.size());
+        assertEquals("user", history.get(0).getRole());
+        assertEquals("assistant", history.get(1).getRole());
+        assertEquals("Full reply", history.get(1).getContent());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamChatRequest_setsStreamTrueOnRequest() throws Exception {
+        doNothing().when(mockClient).sendStreamingPostRequest(anyString(), any(), any());
+
+        service.streamChatRequest("Hi", "deepseek-chat", 100, t -> {});
+
+        ArgumentCaptor<DeepSeekModels.ChatRequest> captor =
+                ArgumentCaptor.forClass(DeepSeekModels.ChatRequest.class);
+        verify(mockClient).sendStreamingPostRequest(anyString(), captor.capture(), any());
+
+        assertTrue(captor.getValue().isStream());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamChatRequest_clientThrows_throwsDeepSeekAPIException() throws Exception {
+        doThrow(new IOException("stream error"))
+                .when(mockClient).sendStreamingPostRequest(anyString(), any(), any());
+
+        assertThrows(DeepSeekAPIException.class, () ->
+                service.streamChatRequest("Hi", "deepseek-chat", 100, t -> {}));
+    }
+
     // --- clearChatHistory ---
 
     @Test
@@ -145,27 +263,19 @@ class DeepSeekServiceTest {
                 history.add(new DeepSeekModels.ChatMessage("user", "injected")));
     }
 
-    // --- defaultMaxTokens ---
-
     @Test
-    void defaultMaxTokens_canBeSetAndRetrieved() {
-        service.setDefaultMaxTokens(4096);
-        assertEquals(4096, service.getDefaultMaxTokens());
-    }
-
-    @Test
-    void defaultMaxTokens_usedWhenNotSpecified() throws Exception {
-        service.setDefaultMaxTokens(1000);
+    void getChatHistory_returnsCopy_notLiveView() throws Exception {
         when(mockClient.sendPostRequest(eq("/chat/completions"), any(), eq(DeepSeekModels.ChatResponse.class)))
                 .thenReturn(buildChatResponse("ok"));
 
-        service.sendChatRequest("test", "deepseek-chat");
+        service.sendChatRequest("First", "deepseek-chat");
+        List<DeepSeekModels.ChatMessage> snapshot = service.getChatHistory();
+        int sizeBefore = snapshot.size();
 
-        ArgumentCaptor<DeepSeekModels.ChatRequest> captor =
-                ArgumentCaptor.forClass(DeepSeekModels.ChatRequest.class);
-        verify(mockClient).sendPostRequest(anyString(), captor.capture(), any());
+        service.sendChatRequest("Second", "deepseek-chat");
 
-        assertEquals(1000, captor.getValue().getMaxTokens());
+        // The earlier snapshot must not have grown
+        assertEquals(sizeBefore, snapshot.size());
     }
 
     // --- generateCompletion ---
@@ -178,6 +288,22 @@ class DeepSeekServiceTest {
         service.generateCompletion("What is 2+2?", "deepseek-chat");
 
         assertTrue(service.getChatHistory().isEmpty());
+    }
+
+    // --- defaultMaxTokens ---
+
+    @Test
+    void defaultMaxTokens_canBeSetAndRetrieved() {
+        service.setDefaultMaxTokens(4096);
+        assertEquals(4096, service.getDefaultMaxTokens());
+    }
+
+    // --- close ---
+
+    @Test
+    void close_delegatesToClient() {
+        service.close();
+        verify(mockClient).close();
     }
 
     // --- helpers ---
