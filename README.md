@@ -1,5 +1,9 @@
 # ZhengHe
 
+<p align="center">
+  <img src="assets/logo.svg" alt="ZhengHe logo" width="180"/>
+</p>
+
 > **A clean, production-ready Java client library for the DeepSeek AI API.**
 
 [![Java](https://img.shields.io/badge/Java-23-blue?logo=openjdk)](https://openjdk.org/)
@@ -31,6 +35,8 @@ ZhengHe wraps the DeepSeek HTTP API in an idiomatic Java interface. It handles a
   - [Stateful Chat (with History)](#stateful-chat-with-history)
   - [Single-Turn Completion](#single-turn-completion)
   - [Configuring Token Limits](#configuring-token-limits)
+  - [Custom System Prompt](#custom-system-prompt)
+  - [Streaming Responses](#streaming-responses)
   - [Clearing Chat History](#clearing-chat-history)
 - [Configuration Reference](#configuration-reference)
 - [API Reference](#api-reference)
@@ -272,6 +278,39 @@ service.setDefaultMaxTokens(4096);
 service.sendChatRequest("Write a short poem.", "deepseek-chat", 256);
 ```
 
+### Custom System Prompt
+
+The default system prompt is `"You are a helpful assistant"`. Override it for any instance:
+
+```java
+service.setSystemPrompt("You are a concise technical writer. Answer in bullet points.");
+
+// Pass null or empty string to send no system message at all
+service.setSystemPrompt(null);
+```
+
+The system prompt is prepended to every request but is never stored in chat history, so `clearChatHistory()` does not affect it.
+
+### Streaming Responses
+
+Use `streamChatRequest` to receive tokens as they are generated rather than waiting for the full response. The conversation history is updated after streaming completes.
+
+```java
+System.out.print("Assistant: ");
+service.streamChatRequest(
+    "Explain quantum entanglement simply.",
+    "deepseek-chat",
+    token -> System.out.print(token)   // called once per token
+);
+System.out.println(); // newline after stream ends
+```
+
+A custom token limit overload is also available:
+
+```java
+service.streamChatRequest("Write a haiku.", "deepseek-chat", 64, token -> System.out.print(token));
+```
+
 ### Clearing Chat History
 
 Start a fresh conversation without creating a new `DeepSeekService` instance:
@@ -318,12 +357,17 @@ service.getChatHistory().forEach(msg ->
 | `getModels()` | Returns all available models |
 | `sendChatRequest(message, model)` | Sends a message; updates history |
 | `sendChatRequest(message, model, maxTokens)` | Sends a message with a custom token limit |
+| `streamChatRequest(message, model, onToken)` | Streams a response token by token; updates history |
+| `streamChatRequest(message, model, maxTokens, onToken)` | Streams with a custom token limit |
 | `generateCompletion(prompt, model)` | Stateless single-turn request; history unchanged |
 | `generateCompletion(prompt, model, maxTokens)` | Stateless with custom token limit |
-| `getChatHistory()` | Returns an unmodifiable view of the current history |
-| `clearChatHistory()` | Clears all conversation history |
+| `getChatHistory()` | Returns a snapshot of the current history (unmodifiable) |
+| `clearChatHistory()` | Clears conversation history; system prompt unaffected |
+| `setSystemPrompt(String)` | Sets the system message prepended to every request |
+| `getSystemPrompt()` | Returns the current system prompt |
 | `setDefaultMaxTokens(int)` | Updates the global default token limit |
 | `getDefaultMaxTokens()` | Returns the current default token limit |
+| `close()` | Releases the underlying HTTP connection pool |
 
 ### `DeepSeekModels.ChatResponse`
 

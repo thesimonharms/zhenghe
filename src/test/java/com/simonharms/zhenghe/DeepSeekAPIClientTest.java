@@ -13,6 +13,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,14 +23,13 @@ class DeepSeekAPIClientTest {
 
     private MockWebServer server;
     private DeepSeekAPIClient client;
-    private ObjectMapper mapper;
 
     @BeforeEach
     void setUp() throws IOException {
         server = new MockWebServer();
         server.start();
 
-        mapper = new ObjectMapper()
+        ObjectMapper mapper = new ObjectMapper()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
                 .setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
 
@@ -40,6 +42,8 @@ class DeepSeekAPIClientTest {
         server.shutdown();
         client.close();
     }
+
+    // --- GET ---
 
     @Test
     void sendGetRequest_success_returnsDeserializedObject() throws Exception {
@@ -57,8 +61,7 @@ class DeepSeekAPIClientTest {
 
     @Test
     void sendGetRequest_setsAuthorizationHeader() throws Exception {
-        String json = "{\"object\":\"list\",\"data\":[]}";
-        server.enqueue(new MockResponse().setBody(json).setResponseCode(200)
+        server.enqueue(new MockResponse().setBody("{\"object\":\"list\",\"data\":[]}").setResponseCode(200)
                 .addHeader("Content-Type", "application/json"));
 
         client.sendGetRequest("/models", DeepSeekModels.ModelResponse.class);
@@ -83,25 +86,23 @@ class DeepSeekAPIClientTest {
                 client.sendGetRequest("/models", DeepSeekModels.ModelResponse.class));
     }
 
+    // --- POST ---
+
     @Test
     void sendPostRequest_success_returnsDeserializedObject() throws Exception {
         String json = """
                 {
-                  "id": "resp-1",
-                  "object": "chat.completion",
-                  "created": 1700000000,
+                  "id": "resp-1", "object": "chat.completion", "created": 1700000000,
                   "model": "deepseek-chat",
-                  "choices": [
-                    {"index": 0, "finish_reason": "stop",
-                     "message": {"role": "assistant", "content": "Hello!"}}
-                  ],
-                  "usage": {"completion_tokens": 5, "prompt_tokens": 10, "total_tokens": 15}
+                  "choices": [{"index":0,"finish_reason":"stop",
+                    "message":{"role":"assistant","content":"Hello!"}}],
+                  "usage": {"completion_tokens":5,"prompt_tokens":10,"total_tokens":15}
                 }
                 """;
         server.enqueue(new MockResponse().setBody(json).setResponseCode(200)
                 .addHeader("Content-Type", "application/json"));
 
-        java.util.List<DeepSeekModels.ChatMessage> messages = new java.util.ArrayList<>();
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
         messages.add(new DeepSeekModels.ChatMessage("user", "Hi"));
         DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 100);
 
@@ -124,7 +125,7 @@ class DeepSeekAPIClientTest {
         server.enqueue(new MockResponse().setBody(json).setResponseCode(200)
                 .addHeader("Content-Type", "application/json"));
 
-        java.util.List<DeepSeekModels.ChatMessage> messages = new java.util.ArrayList<>();
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
         messages.add(new DeepSeekModels.ChatMessage("user", "test"));
         client.sendPostRequest("/chat/completions",
                 new DeepSeekModels.ChatRequest("deepseek-chat", messages, 10),
@@ -139,11 +140,91 @@ class DeepSeekAPIClientTest {
     void sendPostRequest_serverError_throwsIOException() {
         server.enqueue(new MockResponse().setResponseCode(429).setBody("{\"error\":\"rate limited\"}"));
 
-        java.util.List<DeepSeekModels.ChatMessage> messages = new java.util.ArrayList<>();
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
         messages.add(new DeepSeekModels.ChatMessage("user", "test"));
         DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 10);
 
         assertThrows(IOException.class, () ->
                 client.sendPostRequest("/chat/completions", requestBody, DeepSeekModels.ChatResponse.class));
+    }
+
+    // --- Streaming ---
+
+    @Test
+    void sendStreamingPostRequest_deliversTokensToConsumer() throws Exception {
+        String sseBody =
+                "data: {\"id\":\"c1\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"content\":\"Hello\"}}]}\n\n" +
+                "data: {\"id\":\"c2\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"content\":\" world\"}}]}\n\n" +
+                "data: [DONE]\n\n";
+
+        server.enqueue(new MockResponse().setBody(sseBody).setResponseCode(200)
+                .addHeader("Content-Type", "text/event-stream"));
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "Hi"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 100);
+        requestBody.setStream(true);
+
+        StringBuilder collected = new StringBuilder();
+        client.sendStreamingPostRequest("/chat/completions", requestBody, collected::append);
+
+        assertEquals("Hello world", collected.toString());
+    }
+
+    @Test
+    void sendStreamingPostRequest_setsAcceptEventStreamHeader() throws Exception {
+        String sseBody = "data: [DONE]\n\n";
+        server.enqueue(new MockResponse().setBody(sseBody).setResponseCode(200)
+                .addHeader("Content-Type", "text/event-stream"));
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "Hi"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 10);
+        requestBody.setStream(true);
+
+        client.sendStreamingPostRequest("/chat/completions", requestBody, t -> {});
+
+        RecordedRequest request = server.takeRequest();
+        assertEquals("text/event-stream", request.getHeader("Accept"));
+    }
+
+    @Test
+    void sendStreamingPostRequest_serverError_throwsIOException() {
+        server.enqueue(new MockResponse().setResponseCode(500).setBody("error"));
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "Hi"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 10);
+        requestBody.setStream(true);
+
+        assertThrows(IOException.class, () ->
+                client.sendStreamingPostRequest("/chat/completions", requestBody, t -> {}));
+    }
+
+    @Test
+    void sendStreamingPostRequest_skipsChunksWithNullContent() throws Exception {
+        // Role-announcement chunk has no content — should be silently ignored
+        String sseBody =
+                "data: {\"id\":\"c0\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+                "data: {\"id\":\"c1\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"content\":\"Hi\"}}]}\n\n" +
+                "data: [DONE]\n\n";
+
+        server.enqueue(new MockResponse().setBody(sseBody).setResponseCode(200)
+                .addHeader("Content-Type", "text/event-stream"));
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "Hey"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 10);
+        requestBody.setStream(true);
+
+        AtomicInteger callCount = new AtomicInteger(0);
+        StringBuilder collected = new StringBuilder();
+        client.sendStreamingPostRequest("/chat/completions", requestBody, token -> {
+            callCount.incrementAndGet();
+            collected.append(token);
+        });
+
+        assertEquals(1, callCount.get(), "Consumer should only be called for chunks with content");
+        assertEquals("Hi", collected.toString());
     }
 }

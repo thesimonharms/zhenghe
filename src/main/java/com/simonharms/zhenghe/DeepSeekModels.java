@@ -3,7 +3,6 @@ package com.simonharms.zhenghe;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -98,7 +97,8 @@ public class DeepSeekModels {
 
     /**
      * Represents a request to the chat completions endpoint.
-     * Contains messages and parameters that control response generation.
+     * Build the full message list (including any system message) before passing it here —
+     * this class is a plain data holder and does not modify the message list.
      */
     public static class ChatRequest {
 
@@ -156,24 +156,16 @@ public class DeepSeekModels {
         }
 
         /**
-         * Creates a chat request. Automatically prepends a default system message if none is present.
+         * Creates a chat request with the given messages exactly as provided.
          *
          * @param model     the model identifier (e.g., {@code "deepseek-chat"})
-         * @param messages  the list of chat messages
+         * @param messages  the complete list of messages, including any system message
          * @param maxTokens the maximum number of tokens to generate
          */
         public ChatRequest(String model, List<ChatMessage> messages, int maxTokens) {
             this.model = model;
+            this.messages = messages;
             this.maxTokens = maxTokens;
-
-            if (messages.isEmpty() || !"system".equals(messages.get(0).getRole())) {
-                List<ChatMessage> withSystem = new ArrayList<>();
-                withSystem.add(new ChatMessage("system", "You are a helpful assistant"));
-                withSystem.addAll(messages);
-                this.messages = withSystem;
-            } else {
-                this.messages = messages;
-            }
         }
 
         public List<ChatMessage> getMessages() { return messages; }
@@ -330,5 +322,80 @@ public class DeepSeekModels {
             }
             return "ChatResponse{id='" + id + "', model='" + model + "', message='" + content + "'}";
         }
+    }
+
+    /**
+     * Represents a single chunk in a streaming chat completion response (SSE).
+     * Each chunk carries a content delta for the first choice.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ChatStreamChunk {
+
+        @JsonProperty("id")
+        private String id;
+
+        @JsonProperty("model")
+        private String model;
+
+        @JsonProperty("choices")
+        private List<StreamChoice> choices;
+
+        /**
+         * A single streaming choice containing the delta content.
+         */
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public static class StreamChoice {
+
+            @JsonProperty("index")
+            private int index;
+
+            @JsonProperty("delta")
+            private Delta delta;
+
+            @JsonProperty("finish_reason")
+            private String finishReason;
+
+            public int getIndex() { return index; }
+            public void setIndex(int index) { this.index = index; }
+            public Delta getDelta() { return delta; }
+            public void setDelta(Delta delta) { this.delta = delta; }
+            public String getFinishReason() { return finishReason; }
+            public void setFinishReason(String finishReason) { this.finishReason = finishReason; }
+        }
+
+        /**
+         * The incremental content delta for this chunk.
+         */
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public static class Delta {
+
+            @JsonProperty("role")
+            private String role;
+
+            @JsonProperty("content")
+            private String content;
+
+            public String getRole() { return role; }
+            public void setRole(String role) { this.role = role; }
+            public String getContent() { return content; }
+            public void setContent(String content) { this.content = content; }
+        }
+
+        /**
+         * Returns the content delta from the first choice, or {@code null} if this chunk
+         * carries no text content (e.g. the role-announcement chunk or finish chunk).
+         *
+         * @return the content string, or null
+         */
+        public String getContent() {
+            if (choices == null || choices.isEmpty()) return null;
+            Delta delta = choices.get(0).getDelta();
+            if (delta == null) return null;
+            return delta.getContent();
+        }
+
+        public String getId() { return id; }
+        public String getModel() { return model; }
+        public List<StreamChoice> getChoices() { return choices; }
     }
 }

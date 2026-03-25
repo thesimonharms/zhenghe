@@ -1,9 +1,9 @@
 package com.simonharms.zhenghe;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -23,6 +23,8 @@ class DeepSeekModelsTest {
                 .setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
     }
 
+    // --- ChatMessage ---
+
     @Test
     void chatMessage_serializesToJson() throws Exception {
         DeepSeekModels.ChatMessage msg = new DeepSeekModels.ChatMessage("user", "Hello");
@@ -41,20 +43,22 @@ class DeepSeekModelsTest {
         assertEquals("Hi there", msg.getContent());
     }
 
+    // --- ChatRequest ---
+
     @Test
-    void chatRequest_addsSystemMessage_whenNonePresent() {
+    void chatRequest_passesMessagesAsIs() {
         List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
         messages.add(new DeepSeekModels.ChatMessage("user", "Hello"));
 
         DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 100);
 
-        assertEquals(2, request.getMessages().size());
-        assertEquals("system", request.getMessages().get(0).getRole());
-        assertEquals("user", request.getMessages().get(1).getRole());
+        // ChatRequest is a plain data holder — it must not inject any extra messages
+        assertEquals(1, request.getMessages().size());
+        assertEquals("user", request.getMessages().get(0).getRole());
     }
 
     @Test
-    void chatRequest_preservesExistingSystemMessage() {
+    void chatRequest_preservesSystemMessageWhenProvided() {
         List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
         messages.add(new DeepSeekModels.ChatMessage("system", "Custom instructions"));
         messages.add(new DeepSeekModels.ChatMessage("user", "Hello"));
@@ -62,6 +66,7 @@ class DeepSeekModelsTest {
         DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest("deepseek-chat", messages, 100);
 
         assertEquals(2, request.getMessages().size());
+        assertEquals("system", request.getMessages().get(0).getRole());
         assertEquals("Custom instructions", request.getMessages().get(0).getContent());
     }
 
@@ -77,10 +82,11 @@ class DeepSeekModelsTest {
         assertFalse(json.contains("\"maxTokens\""), "maxTokens (camel case) must not appear in JSON");
     }
 
+    // --- ChatResponse ---
+
     @Test
     void chatResponse_getMessage_returnsContent() {
         DeepSeekModels.ChatResponse response = buildChatResponse("Hello from model");
-
         assertEquals("Hello from model", response.getMessage());
     }
 
@@ -97,9 +103,10 @@ class DeepSeekModelsTest {
         DeepSeekModels.ChatResponse response = new DeepSeekModels.ChatResponse();
         response.setChoices(new ArrayList<>());
 
-        // Must not throw
         assertDoesNotThrow(response::toString);
     }
+
+    // --- ModelResponse ---
 
     @Test
     void modelResponse_deserializesFromJson() throws Exception {
@@ -122,7 +129,7 @@ class DeepSeekModelsTest {
     }
 
     @Test
-    void modelResponse_ignoresUnknownFields() throws Exception {
+    void modelResponse_ignoresUnknownFields() {
         String json = """
                 {
                   "object": "list",
@@ -132,6 +139,47 @@ class DeepSeekModelsTest {
                 """;
 
         assertDoesNotThrow(() -> mapper.readValue(json, DeepSeekModels.ModelResponse.class));
+    }
+
+    // --- ChatStreamChunk ---
+
+    @Test
+    void chatStreamChunk_getContent_returnsContentDelta() throws Exception {
+        String json = """
+                {
+                  "id": "chunk-1",
+                  "model": "deepseek-chat",
+                  "choices": [
+                    {"index": 0, "finish_reason": null,
+                     "delta": {"role": "assistant", "content": "Hello"}}
+                  ]
+                }
+                """;
+
+        DeepSeekModels.ChatStreamChunk chunk = mapper.readValue(json, DeepSeekModels.ChatStreamChunk.class);
+        assertEquals("Hello", chunk.getContent());
+    }
+
+    @Test
+    void chatStreamChunk_getContent_returnsNullOnFinishChunk() throws Exception {
+        String json = """
+                {
+                  "id": "chunk-end",
+                  "model": "deepseek-chat",
+                  "choices": [
+                    {"index": 0, "finish_reason": "stop", "delta": {}}
+                  ]
+                }
+                """;
+
+        DeepSeekModels.ChatStreamChunk chunk = mapper.readValue(json, DeepSeekModels.ChatStreamChunk.class);
+        assertNull(chunk.getContent());
+    }
+
+    @Test
+    void chatStreamChunk_getContent_returnsNullOnEmptyChoices() {
+        DeepSeekModels.ChatStreamChunk chunk = new DeepSeekModels.ChatStreamChunk();
+        assertNull(chunk.getContent());
     }
 
     // --- helpers ---

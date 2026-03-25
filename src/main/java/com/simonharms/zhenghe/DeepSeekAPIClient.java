@@ -1,17 +1,20 @@
 package com.simonharms.zhenghe;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * Low-level HTTP client for the DeepSeek API.
@@ -126,6 +129,65 @@ public class DeepSeekAPIClient implements Closeable {
             } else {
                 logger.error("POST {} failed: {} {}\n{}", url, response.code(), response.message(), responseBody);
                 throw new IOException("POST request failed [" + response.code() + "]: " + responseBody);
+            }
+        }
+    }
+
+    /**
+     * Sends a streaming POST request and delivers content tokens to the provided consumer as they arrive.
+     *
+     * <p>The request body must have {@code "stream": true} set. Each non-empty content delta
+     * from the server-sent event stream is passed to {@code onToken}. The consumer is called
+     * on the calling thread and may be invoked many times before this method returns.
+     *
+     * @param endpoint    the API endpoint path (appended to baseUrl)
+     * @param requestBody the object to serialize as the JSON request body (should have stream=true)
+     * @param onToken     called once per content token as it arrives from the API
+     * @throws IOException if the request fails or the stream cannot be read
+     */
+    public void sendStreamingPostRequest(String endpoint, Object requestBody, Consumer<String> onToken)
+            throws IOException {
+        String url = baseUrl + endpoint;
+        String jsonPayload = objectMapper.writeValueAsString(requestBody);
+        logger.debug("POST (streaming) {}", url);
+
+        RequestBody body = RequestBody.create(jsonPayload, MediaType.parse("application/json"));
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .post(body)
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                String errorBody = response.body() != null ? response.body().string() : "(empty)";
+                logger.error("POST (streaming) {} failed: {} {}", url, response.code(), response.message());
+                throw new IOException("Streaming request failed [" + response.code() + "]: " + errorBody);
+            }
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(response.body().byteStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.isEmpty()) continue;
+                    if (!line.startsWith("data: ")) continue;
+
+                    String data = line.substring(6).trim();
+                    if ("[DONE]".equals(data)) break;
+
+                    try {
+                        DeepSeekModels.ChatStreamChunk chunk =
+                                objectMapper.readValue(data, DeepSeekModels.ChatStreamChunk.class);
+                        String content = chunk.getContent();
+                        if (content != null && !content.isEmpty()) {
+                            onToken.accept(content);
+                        }
+                    } catch (Exception e) {
+                        logger.debug("Skipping unparseable SSE chunk: {}", data);
+                    }
+                }
             }
         }
     }
