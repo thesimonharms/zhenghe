@@ -4,8 +4,6 @@
 
 [![Java](https://img.shields.io/badge/Java-23-blue?logo=openjdk)](https://openjdk.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-v1.0.0-orange?logo=github)](https://github.com/thesimonharms/ZhengHe/packages)
-[![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
 
 ---
 
@@ -27,6 +25,7 @@ ZhengHe wraps the DeepSeek HTTP API in an idiomatic Java interface. It handles a
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [API Key Security](#api-key-security)
 - [Usage](#usage)
   - [Listing Available Models](#listing-available-models)
   - [Stateful Chat (with History)](#stateful-chat-with-history)
@@ -125,11 +124,82 @@ ZhengHe uses SLF4J for logging. Add your preferred binding:
 import com.simonharms.zhenghe.DeepSeekService;
 import com.simonharms.zhenghe.DeepSeekModels;
 
-DeepSeekService service = new DeepSeekService("YOUR_API_KEY", "https://api.deepseek.com");
+String apiKey = System.getenv("DEEPSEEK_API_KEY");
+DeepSeekService service = new DeepSeekService(apiKey, "https://api.deepseek.com");
 
 DeepSeekModels.ChatResponse response = service.sendChatRequest("What is the capital of France?", "deepseek-chat");
 System.out.println(response.getMessage()); // "The capital of France is Paris."
 ```
+
+---
+
+## API Key Security
+
+**Never hardcode API keys in your source code.** They will end up in version control and leak. Use one of the patterns below instead.
+
+### Environment variable (recommended)
+
+Set the variable in your shell or deployment environment:
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+```
+
+Read it at runtime:
+
+```java
+String apiKey = System.getenv("DEEPSEEK_API_KEY");
+if (apiKey == null) throw new IllegalStateException("DEEPSEEK_API_KEY not set");
+
+DeepSeekService service = new DeepSeekService(apiKey, "https://api.deepseek.com");
+```
+
+### `.env` file + a loader library
+
+Keep a `.env` file locally (and add it to `.gitignore`):
+
+```
+DEEPSEEK_API_KEY=sk-...
+```
+
+Load it with a library such as [dotenv-java](https://github.com/cdimascio/dotenv-java):
+
+```java
+Dotenv dotenv = Dotenv.load();
+DeepSeekService service = new DeepSeekService(dotenv.get("DEEPSEEK_API_KEY"), "https://api.deepseek.com");
+```
+
+### Java system property
+
+Pass the key at JVM startup — useful in CI pipelines or when injecting secrets via a secrets manager:
+
+```bash
+java -Ddeepseek.api.key="sk-..." -jar your-app.jar
+```
+
+```java
+String apiKey = System.getProperty("deepseek.api.key");
+DeepSeekService service = new DeepSeekService(apiKey, "https://api.deepseek.com");
+```
+
+### External config file
+
+Store the key in a config file outside the project directory (and outside version control):
+
+```properties
+# ~/.config/myapp/secrets.properties
+deepseek.api.key=sk-...
+```
+
+```java
+Properties props = new Properties();
+try (FileInputStream fis = new FileInputStream(System.getProperty("user.home") + "/.config/myapp/secrets.properties")) {
+    props.load(fis);
+}
+DeepSeekService service = new DeepSeekService(props.getProperty("deepseek.api.key"), "https://api.deepseek.com");
+```
+
+> **Note:** The Quick Start example above uses a placeholder string for brevity. In any real application, load your key using one of the patterns above.
 
 ---
 
@@ -142,7 +212,7 @@ import com.simonharms.zhenghe.DeepSeekService;
 import com.simonharms.zhenghe.DeepSeekModels;
 import com.simonharms.zhenghe.DeepSeekAPIException;
 
-DeepSeekService service = new DeepSeekService("YOUR_API_KEY", "https://api.deepseek.com");
+DeepSeekService service = new DeepSeekService(System.getenv("DEEPSEEK_API_KEY"), "https://api.deepseek.com");
 
 try {
     service.getModels().forEach(model ->
@@ -158,7 +228,7 @@ try {
 Each call to `sendChatRequest` appends both the user message and the assistant reply to an in-memory history. The full history is sent with every subsequent request, giving the model context about previous turns.
 
 ```java
-DeepSeekService service = new DeepSeekService("YOUR_API_KEY", "https://api.deepseek.com", 2048);
+DeepSeekService service = new DeepSeekService(System.getenv("DEEPSEEK_API_KEY"), "https://api.deepseek.com", 2048);
 String model = "deepseek-chat";
 
 try {
