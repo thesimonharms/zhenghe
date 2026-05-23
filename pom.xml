@@ -1,7 +1,9 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<?xml version="1.0" encoding="UTF-8" ?>
+<project
+    xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
+>
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.simonharms</groupId>
@@ -10,7 +12,8 @@
     <packaging>jar</packaging>
 
     <name>ZhengHe</name>
-    <description>Java Client Library for interfacing with DeepSeek's AI Models</description>
+    <description
+    >Java Client Library for interfacing with DeepSeek's AI Models</description>
     <url>https://github.com/thesimonharms/ZhengHe</url>
 
     <licenses>
@@ -22,8 +25,10 @@
     </licenses>
 
     <scm>
-        <connection>scm:git:git://github.com/thesimonharms/ZhengHe.git</connection>
-        <developerConnection>scm:git:ssh://github.com/thesimonharms/ZhengHe.git</developerConnection>
+        <connection
+        >scm:git:git://github.com/thesimonharms/ZhengHe.git</connection>
+        <developerConnection
+        >scm:git:ssh://github.com/thesimonharms/ZhengHe.git</developerConnection>
         <url>https://github.com/thesimonharms/ZhengHe</url>
         <tag>HEAD</tag>
     </scm>
@@ -100,6 +105,14 @@
         </dependency>
     </dependencies>
 
+    <distributionManagement>
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://central.sonatype.com/repository/maven-releases/</url>
+        </repository>
+    </distributionManagement>
+
     <build>
         <plugins>
             <!-- Compiler plugin -->
@@ -164,8 +177,10 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
-                            <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+                            <addDefaultImplementationEntries
+                            >true</addDefaultImplementationEntries>
+                            <addDefaultSpecificationEntries
+                            >true</addDefaultSpecificationEntries>
                         </manifest>
                     </archive>
                 </configuration>
