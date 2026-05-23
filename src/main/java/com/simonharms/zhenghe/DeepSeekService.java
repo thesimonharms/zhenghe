@@ -1,14 +1,13 @@
 package com.simonharms.zhenghe;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * High-level service for interacting with the DeepSeek API.
@@ -36,14 +35,17 @@ import java.util.function.Consumer;
  */
 public class DeepSeekService implements Closeable {
 
-    private static final Logger logger = LoggerFactory.getLogger(DeepSeekService.class);
+    private static final Logger logger = LoggerFactory.getLogger(
+        DeepSeekService.class
+    );
     private static final int DEFAULT_MAX_TOKENS = 2048;
     static final String DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant";
 
     private final DeepSeekAPIClient client;
     private int defaultMaxTokens;
     private volatile String systemPrompt = DEFAULT_SYSTEM_PROMPT;
-    private final List<DeepSeekModels.ChatMessage> chatHistory = new ArrayList<>();
+    private final List<DeepSeekModels.ChatMessage> chatHistory =
+        new ArrayList<>();
 
     /**
      * Constructs a new service with a custom default token limit.
@@ -52,7 +54,11 @@ public class DeepSeekService implements Closeable {
      * @param baseUrl          the base URL (e.g., {@code "https://api.deepseek.com"})
      * @param defaultMaxTokens the default maximum tokens for each response
      */
-    public DeepSeekService(String apiKey, String baseUrl, int defaultMaxTokens) {
+    public DeepSeekService(
+        String apiKey,
+        String baseUrl,
+        int defaultMaxTokens
+    ) {
         this(new DeepSeekAPIClient(apiKey, baseUrl), defaultMaxTokens);
     }
 
@@ -84,10 +90,13 @@ public class DeepSeekService implements Closeable {
      * @return a list of {@link DeepSeekModels.ModelData} objects
      * @throws DeepSeekAPIException if the request fails
      */
-    public List<DeepSeekModels.ModelData> getModels() throws DeepSeekAPIException {
+    public List<DeepSeekModels.ModelData> getModels()
+        throws DeepSeekAPIException {
         try {
-            DeepSeekModels.ModelResponse response =
-                    client.sendGetRequest("/models", DeepSeekModels.ModelResponse.class);
+            DeepSeekModels.ModelResponse response = client.sendGetRequest(
+                "/models",
+                DeepSeekModels.ModelResponse.class
+            );
             return response.getData();
         } catch (IOException e) {
             throw new DeepSeekAPIException("Failed to fetch models", e);
@@ -107,13 +116,25 @@ public class DeepSeekService implements Closeable {
      * @return the API response
      * @throws DeepSeekAPIException if the request fails
      */
-    public DeepSeekModels.ChatResponse generateCompletion(String prompt, String model, int maxTokens)
-            throws DeepSeekAPIException {
+    public DeepSeekModels.ChatResponse generateCompletion(
+        String prompt,
+        String model,
+        int maxTokens
+    ) throws DeepSeekAPIException {
+        String resolvedModel = DeepSeekModels.resolveModel(model);
         try {
             List<DeepSeekModels.ChatMessage> messages = buildSystemMessages();
             messages.add(new DeepSeekModels.ChatMessage("user", prompt));
-            DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(model, messages, maxTokens);
-            return client.sendPostRequest("/chat/completions", request, DeepSeekModels.ChatResponse.class);
+            DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(
+                resolvedModel,
+                messages,
+                maxTokens
+            );
+            return client.sendPostRequest(
+                "/chat/completions",
+                request,
+                DeepSeekModels.ChatResponse.class
+            );
         } catch (IOException e) {
             throw new DeepSeekAPIException("Failed to generate completion", e);
         }
@@ -127,8 +148,10 @@ public class DeepSeekService implements Closeable {
      * @return the API response
      * @throws DeepSeekAPIException if the request fails
      */
-    public DeepSeekModels.ChatResponse generateCompletion(String prompt, String model)
-            throws DeepSeekAPIException {
+    public DeepSeekModels.ChatResponse generateCompletion(
+        String prompt,
+        String model
+    ) throws DeepSeekAPIException {
         return generateCompletion(prompt, model, defaultMaxTokens);
     }
 
@@ -150,27 +173,43 @@ public class DeepSeekService implements Closeable {
      * @throws DeepSeekAPIException if the request fails
      */
     public synchronized DeepSeekModels.ChatResponse sendChatRequest(
-            String message, String model, int maxTokens) throws DeepSeekAPIException {
-
-        logger.info("Sending chat request — model: {}, maxTokens: {}", model, maxTokens);
+        String message,
+        String model,
+        int maxTokens
+    ) throws DeepSeekAPIException {
+        String resolvedModel = DeepSeekModels.resolveModel(model);
+        logger.info(
+            "Sending chat request — model: {}, maxTokens: {}",
+            resolvedModel,
+            maxTokens
+        );
         chatHistory.add(new DeepSeekModels.ChatMessage("user", message));
         List<DeepSeekModels.ChatMessage> messages = buildMessagesSnapshot();
 
         try {
-            DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(model, messages, maxTokens);
-            DeepSeekModels.ChatResponse response =
-                    client.sendPostRequest("/chat/completions", request, DeepSeekModels.ChatResponse.class);
+            DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(
+                resolvedModel,
+                messages,
+                maxTokens
+            );
+            DeepSeekModels.ChatResponse response = client.sendPostRequest(
+                "/chat/completions",
+                request,
+                DeepSeekModels.ChatResponse.class
+            );
 
-            if (response != null
-                    && response.getChoices() != null
-                    && !response.getChoices().isEmpty()
-                    && response.getChoices().get(0).getMessage() != null) {
+            if (
+                response != null &&
+                response.getChoices() != null &&
+                !response.getChoices().isEmpty() &&
+                response.getChoices().get(0).getMessage() != null
+            ) {
                 chatHistory.add(response.getChoices().get(0).getMessage());
                 logger.debug("Chat history size: {}", chatHistory.size());
             }
             return response;
         } catch (IOException e) {
-            logger.error("Chat request failed for model {}", model, e);
+            logger.error("Chat request failed for model {}", resolvedModel, e);
             throw new DeepSeekAPIException("Failed to send chat request", e);
         }
     }
@@ -183,8 +222,10 @@ public class DeepSeekService implements Closeable {
      * @return the API response
      * @throws DeepSeekAPIException if the request fails
      */
-    public DeepSeekModels.ChatResponse sendChatRequest(String message, String model)
-            throws DeepSeekAPIException {
+    public DeepSeekModels.ChatResponse sendChatRequest(
+        String message,
+        String model
+    ) throws DeepSeekAPIException {
         return sendChatRequest(message, model, defaultMaxTokens);
     }
 
@@ -204,30 +245,69 @@ public class DeepSeekService implements Closeable {
      * @throws DeepSeekAPIException if the request fails
      */
     public synchronized void streamChatRequest(
-            String message, String model, int maxTokens, Consumer<String> onToken)
-            throws DeepSeekAPIException {
-
-        logger.info("Streaming chat request — model: {}, maxTokens: {}", model, maxTokens);
+        String message,
+        String model,
+        int maxTokens,
+        Consumer<String> onToken
+    ) throws DeepSeekAPIException {
+        String resolvedModel = DeepSeekModels.resolveModel(model);
+        logger.info(
+            "Streaming chat request — model: {}, maxTokens: {}",
+            resolvedModel,
+            maxTokens
+        );
         chatHistory.add(new DeepSeekModels.ChatMessage("user", message));
         List<DeepSeekModels.ChatMessage> messages = buildMessagesSnapshot();
 
-        DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(model, messages, maxTokens);
+        DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(
+            resolvedModel,
+            messages,
+            maxTokens
+        );
         request.setStream(true);
 
         StringBuilder fullResponse = new StringBuilder();
+        StringBuilder fullReasoning = new StringBuilder();
         try {
-            client.sendStreamingPostRequest("/chat/completions", request, token -> {
-                onToken.accept(token);
-                fullResponse.append(token);
-            });
+            client.sendStreamingPostRequest(
+                "/chat/completions",
+                request,
+                chunk -> {
+                    String content = chunk.getContent();
+                    if (content != null && !content.isEmpty()) {
+                        onToken.accept(content);
+                        fullResponse.append(content);
+                    }
+                    String reasoning = chunk.getReasoningContent();
+                    if (reasoning != null && !reasoning.isEmpty()) {
+                        fullReasoning.append(reasoning);
+                    }
+                }
+            );
         } catch (IOException e) {
-            logger.error("Streaming chat request failed for model {}", model, e);
+            logger.error(
+                "Streaming chat request failed for model {}",
+                resolvedModel,
+                e
+            );
             throw new DeepSeekAPIException("Failed to stream chat request", e);
         }
 
         if (!fullResponse.isEmpty()) {
-            chatHistory.add(new DeepSeekModels.ChatMessage("assistant", fullResponse.toString()));
-            logger.debug("Chat history size after stream: {}", chatHistory.size());
+            String responseText = fullResponse.toString();
+            String reasoningText =
+                fullReasoning.length() > 0 ? fullReasoning.toString() : null;
+            chatHistory.add(
+                new DeepSeekModels.ChatMessage(
+                    "assistant",
+                    responseText,
+                    reasoningText
+                )
+            );
+            logger.debug(
+                "Chat history size after stream: {}",
+                chatHistory.size()
+            );
         }
     }
 
@@ -239,8 +319,11 @@ public class DeepSeekService implements Closeable {
      * @param onToken called once per content token as it arrives
      * @throws DeepSeekAPIException if the request fails
      */
-    public void streamChatRequest(String message, String model, Consumer<String> onToken)
-            throws DeepSeekAPIException {
+    public void streamChatRequest(
+        String message,
+        String model,
+        Consumer<String> onToken
+    ) throws DeepSeekAPIException {
         streamChatRequest(message, model, defaultMaxTokens, onToken);
     }
 
@@ -331,7 +414,9 @@ public class DeepSeekService implements Closeable {
     private List<DeepSeekModels.ChatMessage> buildSystemMessages() {
         List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isEmpty()) {
-            messages.add(new DeepSeekModels.ChatMessage("system", systemPrompt));
+            messages.add(
+                new DeepSeekModels.ChatMessage("system", systemPrompt)
+            );
         }
         return messages;
     }

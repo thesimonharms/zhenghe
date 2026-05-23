@@ -13,7 +13,7 @@
 
 ### Why "ZhengHe"?
 
-In the early 15th century, the Chinese admiral **Zheng He** (鄭和) led the largest naval expeditions in history — famously sailing all the way to **Java** (the island). Six centuries later, **DeepSeek** is a Chinese AI model making its own voyage to **Java** (the programming language).
+In the early 15th century, the Chinese admiral **Zheng He** (鄭和) led the largest naval expeditions in history — famously sailing all the way to **Java** (the island) and further. Six centuries later, **DeepSeek** is a Chinese AI model making its own voyage to **Java** (the programming language).
 
 ZhengHe is that voyage.
 
@@ -133,7 +133,7 @@ import com.simonharms.zhenghe.DeepSeekModels;
 String apiKey = System.getenv("DEEPSEEK_API_KEY");
 DeepSeekService service = new DeepSeekService(apiKey, "https://api.deepseek.com");
 
-DeepSeekModels.ChatResponse response = service.sendChatRequest("What is the capital of France?", "deepseek-chat");
+DeepSeekModels.ChatResponse response = service.sendChatRequest("What is the capital of France?", DeepSeekModels.DEEPSEEK_V4_FLASH);
 System.out.println(response.getMessage()); // "The capital of France is Paris."
 ```
 
@@ -211,6 +211,34 @@ DeepSeekService service = new DeepSeekService(props.getProperty("deepseek.api.ke
 
 ## Usage
 
+### Active Models
+
+The library ships with constants for the latest DeepSeek V4 models:
+
+| Constant | Value | Description |
+|---|---|---|
+| `DeepSeekModels.DEEPSEEK_V4_FLASH` | `"deepseek-v4-flash"` | Fast and cost-effective — replaces all previous models |
+| `DeepSeekModels.DEEPSEEK_V4_PRO` | `"deepseek-v4-pro"` | Highest quality reasoning |
+
+### Deprecated Model Resolution
+
+All older DeepSeek model identifiers (`"deepseek-chat"`, `"deepseek-reasoner"`, `"deepseek-coder"`, `"deepseek-v2"`, etc.) are **automatically resolved** to `deepseek-v4-flash` at runtime. The library logs a warning when a deprecated model is used, so you can migrate your code at your own pace.
+
+You can check whether a model ID is deprecated programmatically:
+
+```java
+if (DeepSeekModels.isDeprecated("deepseek-chat")) {
+    System.out.println("This model ID is deprecated and will be resolved to "
+        + DeepSeekModels.DEEPSEEK_V4_FLASH);
+}
+```
+
+To see the full list of known deprecated model IDs:
+
+```java
+DeepSeekModels.getDeprecatedModels().forEach(System.out::println);
+```
+
 ### Listing Available Models
 
 ```java
@@ -235,7 +263,7 @@ Each call to `sendChatRequest` appends both the user message and the assistant r
 
 ```java
 DeepSeekService service = new DeepSeekService(System.getenv("DEEPSEEK_API_KEY"), "https://api.deepseek.com", 2048);
-String model = "deepseek-chat";
+String model = DeepSeekModels.DEEPSEEK_V4_PRO;
 
 try {
     // Turn 1
@@ -261,7 +289,7 @@ try {
 ```java
 try {
     DeepSeekModels.ChatResponse response =
-        service.generateCompletion("Summarise the Turing test in one sentence.", "deepseek-chat");
+        service.generateCompletion("Summarise the Turing test in one sentence.", DeepSeekModels.DEEPSEEK_V4_FLASH);
     System.out.println(response.getMessage());
 } catch (DeepSeekAPIException e) {
     System.err.println("Error: " + e.getMessage());
@@ -275,7 +303,7 @@ try {
 service.setDefaultMaxTokens(4096);
 
 // Override per request
-service.sendChatRequest("Write a short poem.", "deepseek-chat", 256);
+service.sendChatRequest("Write a short poem.", DeepSeekModels.DEEPSEEK_V4_FLASH, 256);
 ```
 
 ### Custom System Prompt
@@ -299,7 +327,7 @@ Use `streamChatRequest` to receive tokens as they are generated rather than wait
 System.out.print("Assistant: ");
 service.streamChatRequest(
     "Explain quantum entanglement simply.",
-    "deepseek-chat",
+    DeepSeekModels.DEEPSEEK_V4_FLASH,
     token -> System.out.print(token)   // called once per token
 );
 System.out.println(); // newline after stream ends
@@ -308,8 +336,54 @@ System.out.println(); // newline after stream ends
 A custom token limit overload is also available:
 
 ```java
-service.streamChatRequest("Write a haiku.", "deepseek-chat", 64, token -> System.out.print(token));
+service.streamChatRequest("Write a haiku.", DeepSeekModels.DEEPSEEK_V4_FLASH, 64, token -> System.out.print(token));
 ```
+
+### Thinking Mode (Chain-of-Thought Reasoning)
+
+The DeepSeek V4 Pro model supports **thinking mode** — it outputs a chain-of-thought reasoning trace before the final answer. Thinking mode is enabled by default for `deepseek-v4-pro`; you can control it explicitly via the request object.
+
+```java
+import com.simonharms.zhenghe.DeepSeekModels.ChatRequest.ThinkingConfig;
+
+// Enable thinking mode with high effort
+ChatRequest request = new ChatRequest(
+    DeepSeekModels.DEEPSEEK_V4_PRO, messages, 2048);
+request.setThinking(new ThinkingConfig("enabled"));
+request.setReasoningEffort("high");
+```
+
+When thinking mode is active, the API returns `reasoning_content` alongside `content` on the assistant message:
+
+```java
+// From a non-streaming response
+DeepSeekModels.ChatResponse response = service.sendChatRequest(
+    "What is 9.11 vs 9.8?", DeepSeekModels.DEEPSEEK_V4_PRO);
+String reasoning = response.getChoices().get(0).getMessage().getReasoningContent();
+String answer = response.getMessage();
+```
+
+#### Streaming with reasoning
+
+During streaming, reasoning content arrives in separate chunks before the visible content. The service transparently captures both and stores them in the chat history:
+
+```java
+service.streamChatRequest(
+    "How many Rs are in 'strawberry'?",
+    DeepSeekModels.DEEPSEEK_V4_PRO,
+    token -> System.out.print(token)           // visible content tokens only
+);
+
+// reasoning_content is captured in history automatically
+DeepSeekModels.ChatMessage lastMsg = service.getChatHistory()
+    .get(service.getChatHistory().size() - 1);
+System.out.println("Reasoning: " + lastMsg.getReasoningContent());
+```
+
+**Things to note:**
+- `temperature`, `top_p`, `presence_penalty`, and `frequency_penalty` have no effect when thinking mode is enabled.
+- In multi-turn conversations **without tool calls**, `reasoning_content` from previous turns is automatically handled by the API — you don't need to manage it.
+- In multi-turn conversations **with tool calls**, the `reasoning_content` must be included in subsequent requests. Since ZhengHe preserves it in the chat history, this happens automatically when using `sendChatRequest` or `streamChatRequest`.
 
 ### Clearing Chat History
 
@@ -387,7 +461,7 @@ All API errors throw `DeepSeekAPIException` (a checked exception). Where applica
 
 ```java
 try {
-    service.sendChatRequest("Hello", "deepseek-chat");
+    service.sendChatRequest("Hello", DeepSeekModels.DEEPSEEK_V4_FLASH);
 } catch (DeepSeekAPIException e) {
     System.err.println("Message:     " + e.getMessage());
     System.err.println("Status code: " + e.getStatusCode()); // -1 if not an HTTP error
