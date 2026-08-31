@@ -3,6 +3,7 @@ package com.simonharms.zhenghe;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -33,6 +34,30 @@ public class DeepSeekModels {
      */
     public static final String DEEPSEEK_V4_PRO = "deepseek-v4-pro";
 
+    /**
+     * Experimental vision model — accepts image input alongside text.
+     * Supports the same features as {@link #DEEPSEEK_V4_FLASH}.
+     */
+    public static final String DEEPSEEK_V4_FLASH_VISION_EXP =
+        "deepseek-v4-flash-vision-exp";
+
+    private static final Set<String> ACTIVE_MODELS = Set.of(
+        DEEPSEEK_V4_FLASH,
+        DEEPSEEK_V4_PRO,
+        DEEPSEEK_V4_FLASH_VISION_EXP
+    );
+
+    /**
+     * Valid values for {@code reasoning_effort} in thinking mode.
+     */
+    public static final Set<String> VALID_REASONING_EFFORTS = Set.of(
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+    );
+
     // ------------------------------------------------------------------------
     // Deprecated models — all redirect to flash
     // ------------------------------------------------------------------------
@@ -51,7 +76,8 @@ public class DeepSeekModels {
      * Resolves a model identifier to the active model that the API should receive.
      *
      * <ul>
-     *   <li><b>Active models</b> ({@link #DEEPSEEK_V4_FLASH}, {@link #DEEPSEEK_V4_PRO}) are returned as-is.</li>
+     *   <li><b>Active models</b> ({@link #DEEPSEEK_V4_FLASH}, {@link #DEEPSEEK_V4_PRO},
+     *       {@link #DEEPSEEK_V4_FLASH_VISION_EXP}) are returned as-is.</li>
      *   <li><b>Known deprecated models</b> are silently mapped to {@link #DEEPSEEK_V4_FLASH} with a warning log.</li>
      *   <li><b>Unknown models</b> are passed through — the API will handle any errors.</li>
      *   <li><b>Null</b> defaults to {@link #DEEPSEEK_V4_FLASH}.</li>
@@ -66,9 +92,7 @@ public class DeepSeekModels {
         }
 
         // Active models — pass through unchanged
-        if (
-            DEEPSEEK_V4_FLASH.equals(modelId) || DEEPSEEK_V4_PRO.equals(modelId)
-        ) {
+        if (ACTIVE_MODELS.contains(modelId)) {
             return modelId;
         }
 
@@ -108,15 +132,53 @@ public class DeepSeekModels {
     }
 
     /**
+     * Returns an unmodifiable set of all active model identifiers.
+     *
+     * @return the set of active model IDs
+     */
+    public static Set<String> getActiveModels() {
+        return Collections.unmodifiableSet(ACTIVE_MODELS);
+    }
+
+    /**
+     * Returns {@code true} if the given model ID is an active model.
+     *
+     * @param modelId the model identifier to check
+     * @return true if the model is one of the current DeepSeek models
+     */
+    public static boolean isActive(String modelId) {
+        return ACTIVE_MODELS.contains(modelId);
+    }
+
+    /**
+     * Returns {@code true} if the given model accepts image input.
+     * Images are supported in user messages only.
+     *
+     * @param modelId the model identifier to check
+     * @return true if the model supports vision input
+     */
+    public static boolean supportsVision(String modelId) {
+        return DEEPSEEK_V4_FLASH_VISION_EXP.equals(modelId);
+    }
+
+    /**
      * Represents a single message in a chat conversation.
+     *
+     * <p>{@code content} holds either a plain {@link String} or a list of
+     * {@link ContentPart} objects for multimodal (vision) requests. Text-only
+     * messages use the plain constructors. Vision messages are built with the
+     * {@link ContentPart} factories, e.g. {@code ContentPart.imageUrl(...)}.
      */
     public static class ChatMessage {
 
         @JsonProperty("role")
         private String role;
 
+        /**
+         * String for text-only messages, or List&lt;ContentPart&gt; for vision requests.
+         */
         @JsonProperty("content")
-        private String content;
+        private Object content;
 
         @JsonProperty("reasoning_content")
         @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -146,20 +208,69 @@ public class DeepSeekModels {
             this.reasoningContent = reasoningContent;
         }
 
+        /**
+         * Creates a multimodal message whose content is an array of content parts.
+         * Images are supported in user messages only.
+         *
+         * @param role  the message role (must be "user" for vision models)
+         * @param parts the content parts — mix of text and image blocks
+         * @return a chat message carrying the content-part array
+         */
+        public static ChatMessage multimodal(
+            String role,
+            List<ContentPart> parts
+        ) {
+            ChatMessage msg = new ChatMessage();
+            msg.role = role;
+            msg.content = new ArrayList<>(parts);
+            return msg;
+        }
+
+        /**
+         * Returns the text content if this message carries plain text, or
+         * {@code null} if the content is a multimodal content-part array.
+         *
+         * @return the text content, or null for multimodal messages
+         */
+        @SuppressWarnings("unchecked")
+        public String getContent() {
+            return content instanceof String ? (String) content : null;
+        }
+
+        public void setContent(String content) {
+            this.content = content;
+        }
+
+        /**
+         * Returns the raw content — a String, or a List of ContentPart for
+         * multimodal messages.
+         *
+         * @return the raw content object
+         */
+        public Object getRawContent() {
+            return content;
+        }
+
+        /**
+         * Returns the multimodal content parts, or {@code null} if this message
+         * carries plain text content.
+         *
+         * @return the content parts, or null for text-only messages
+         */
+        @SuppressWarnings("unchecked")
+        public List<ContentPart> getContentParts() {
+            if (content instanceof List) {
+                return (List<ContentPart>) content;
+            }
+            return null;
+        }
+
         public String getRole() {
             return role;
         }
 
         public void setRole(String role) {
             this.role = role;
-        }
-
-        public String getContent() {
-            return content;
-        }
-
-        public void setContent(String content) {
-            this.content = content;
         }
 
         public String getReasoningContent() {
@@ -175,6 +286,149 @@ public class DeepSeekModels {
             return (
                 "ChatMessage{role='" + role + "', content='" + content + "'}"
             );
+        }
+    }
+
+    /**
+     * A single block inside a multimodal message content array.
+     * Use the static factory methods to build text or image blocks.
+     *
+     * <ul>
+     *   <li>{@link #text(String)} — a text block.</li>
+     *   <li>{@link #imageUrl(String)} / {@link #imageUrl(String, String)} — an
+     *       image given as a {@code data:} URL or an external {@code http(s)} URL.</li>
+     *   <li>{@link #fileId(String)} — an image uploaded through the Files API.</li>
+     * </ul>
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class ContentPart {
+
+        private String type;
+
+        private String text;
+
+        @JsonProperty("image_url")
+        private ImageUrl imageUrl;
+
+        @JsonProperty("file_id")
+        private String fileId;
+
+        public ContentPart() {}
+
+        private ContentPart(String type) {
+            this.type = type;
+        }
+
+        /**
+         * Creates a text content block.
+         *
+         * @param text the text content
+         * @return the text content part
+         */
+        public static ContentPart text(String text) {
+            ContentPart part = new ContentPart("text");
+            part.text = text;
+            return part;
+        }
+
+        /**
+         * Creates an image block from a data URL or an external http(s) URL.
+         *
+         * @param url a {@code data:image/...;base64,...} URL or an https URL
+         * @return the image content part
+         */
+        public static ContentPart imageUrl(String url) {
+            return imageUrl(url, null);
+        }
+
+        /**
+         * Creates an image block with an optional detail level
+         * ({@code low}, {@code high}, {@code original}, or {@code auto}).
+         *
+         * @param url    a data URL or an external http(s) URL
+         * @param detail the detail level (may be null)
+         * @return the image content part
+         */
+        public static ContentPart imageUrl(String url, String detail) {
+            ContentPart part = new ContentPart("image_url");
+            ImageUrl img = new ImageUrl();
+            img.url = url;
+            img.detail = detail;
+            part.imageUrl = img;
+            return part;
+        }
+
+        /**
+         * Creates a file block that references an image uploaded via the Files API.
+         *
+         * @param fileId the Files API file ID ({@code file-api-...})
+         * @return the file content part
+         */
+        public static ContentPart fileId(String fileId) {
+            ContentPart part = new ContentPart("file");
+            part.fileId = fileId;
+            return part;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getText() {
+            return text;
+        }
+
+        public void setText(String text) {
+            this.text = text;
+        }
+
+        public ImageUrl getImageUrl() {
+            return imageUrl;
+        }
+
+        public void setImageUrl(ImageUrl imageUrl) {
+            this.imageUrl = imageUrl;
+        }
+
+        public String getFileId() {
+            return fileId;
+        }
+
+        public void setFileId(String fileId) {
+            this.fileId = fileId;
+        }
+
+        /**
+         * The image reference: URL plus optional detail level.
+         */
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public static class ImageUrl {
+
+            private String url;
+
+            private String detail;
+
+            public String getUrl() {
+                return url;
+            }
+
+            public void setUrl(String url) {
+                this.url = url;
+            }
+
+            public String getDetail() {
+                return detail;
+            }
+
+            public void setDetail(String detail) {
+                this.detail = detail;
+            }
         }
     }
 
@@ -603,6 +857,14 @@ public class DeepSeekModels {
             @JsonProperty("total_tokens")
             private int totalTokens;
 
+            @JsonProperty("prompt_cache_hit_tokens")
+            @JsonInclude(JsonInclude.Include.NON_DEFAULT)
+            private int promptCacheHitTokens;
+
+            @JsonProperty("prompt_cache_miss_tokens")
+            @JsonInclude(JsonInclude.Include.NON_DEFAULT)
+            private int promptCacheMissTokens;
+
             public int getCompletionTokens() {
                 return completionTokens;
             }
@@ -625,6 +887,33 @@ public class DeepSeekModels {
 
             public void setTotalTokens(int totalTokens) {
                 this.totalTokens = totalTokens;
+            }
+
+            /**
+             * Returns the number of prompt tokens that hit the context cache
+             * (billed at the cache-hit rate).
+             *
+             * @return prompt cache hit token count
+             */
+            public int getPromptCacheHitTokens() {
+                return promptCacheHitTokens;
+            }
+
+            public void setPromptCacheHitTokens(int promptCacheHitTokens) {
+                this.promptCacheHitTokens = promptCacheHitTokens;
+            }
+
+            /**
+             * Returns the number of prompt tokens that missed the context cache.
+             *
+             * @return prompt cache miss token count
+             */
+            public int getPromptCacheMissTokens() {
+                return promptCacheMissTokens;
+            }
+
+            public void setPromptCacheMissTokens(int promptCacheMissTokens) {
+                this.promptCacheMissTokens = promptCacheMissTokens;
             }
         }
 

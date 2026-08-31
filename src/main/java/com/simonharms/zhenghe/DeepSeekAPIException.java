@@ -41,6 +41,20 @@ public class DeepSeekAPIException extends Exception {
     }
 
     /**
+     * Constructs a new DeepSeek API exception with a status code and cause.
+     * If the cause is a {@link DeepSeekHTTPException}, its status code is used
+     * automatically.
+     *
+     * @param message the detail message explaining the error
+     * @param cause   the underlying cause of the error
+     * @param status  the HTTP status code
+     */
+    public DeepSeekAPIException(String message, Throwable cause, int status) {
+        super(message, cause);
+        this.statusCode = status;
+    }
+
+    /**
      * Returns the HTTP status code associated with this exception, or {@code -1} if not applicable.
      *
      * @return the HTTP status code, or -1 if none

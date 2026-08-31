@@ -88,7 +88,9 @@ public class DeepSeekService implements Closeable {
      * Retrieves the list of models available through the API.
      *
      * @return a list of {@link DeepSeekModels.ModelData} objects
-     * @throws DeepSeekAPIException if the request fails
+     * @throws DeepSeekAPIException if the request fails; the HTTP status code is
+     *                              available via {@link DeepSeekAPIException#getStatusCode()}
+     *                              when the API returned an error response
      */
     public List<DeepSeekModels.ModelData> getModels()
         throws DeepSeekAPIException {
@@ -98,6 +100,12 @@ public class DeepSeekService implements Closeable {
                 DeepSeekModels.ModelResponse.class
             );
             return response.getData();
+        } catch (DeepSeekHTTPException e) {
+            throw new DeepSeekAPIException(
+                "Failed to fetch models",
+                e,
+                e.getStatusCode()
+            );
         } catch (IOException e) {
             throw new DeepSeekAPIException("Failed to fetch models", e);
         }
@@ -135,6 +143,12 @@ public class DeepSeekService implements Closeable {
                 request,
                 DeepSeekModels.ChatResponse.class
             );
+        } catch (DeepSeekHTTPException e) {
+            throw new DeepSeekAPIException(
+                "Failed to generate completion",
+                e,
+                e.getStatusCode()
+            );
         } catch (IOException e) {
             throw new DeepSeekAPIException("Failed to generate completion", e);
         }
@@ -153,6 +167,92 @@ public class DeepSeekService implements Closeable {
         String model
     ) throws DeepSeekAPIException {
         return generateCompletion(prompt, model, defaultMaxTokens);
+    }
+
+    // -------------------------------------------------------------------------
+    // Vision (image input)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Sends a single-turn vision request to a vision-capable model
+     * ({@link DeepSeekModels#DEEPSEEK_V4_FLASH_VISION_EXP}).
+     *
+     * <p>The message is built from the given text and image references and sent
+     * as a multimodal content array. Images are supported in user messages only.
+     * This method does not modify or consult chat history.
+     *
+     * <p>Each image may be:
+     *
+     * <ul>
+     *   <li>a {@code data:image/...;base64,...} data URL (inline, up to 32 MiB)</li>
+     *   <li>an external {@code http(s)} URL (max 8192 characters)</li>
+     *   <li>a Files API file ID ({@code file-api-...})</li>
+     * </ul>
+     *
+     * @param prompt    the text prompt describing the request
+     * @param model     a vision model, e.g. {@link DeepSeekModels#DEEPSEEK_V4_FLASH_VISION_EXP}
+     * @param maxTokens the maximum number of tokens to generate
+     * @param imageUrls image references — data URLs, http(s) URLs, or file IDs
+     *                  produced by the Files API
+     * @return the API response
+     * @throws DeepSeekAPIException if the request fails or the model does not support vision
+     */
+    public DeepSeekModels.ChatResponse sendVisionRequest(
+        String prompt,
+        String model,
+        int maxTokens,
+        List<String> imageUrls
+    ) throws DeepSeekAPIException {
+        String resolvedModel = DeepSeekModels.resolveModel(model);
+        if (!DeepSeekModels.supportsVision(resolvedModel)) {
+            throw new DeepSeekAPIException(
+                "Model '" +
+                    resolvedModel +
+                    "' does not support image input. Use " +
+                    DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP +
+                    "."
+            );
+        }
+        if (imageUrls == null || imageUrls.isEmpty()) {
+            throw new IllegalArgumentException(
+                "At least one image URL or file ID is required"
+            );
+        }
+
+        try {
+            List<DeepSeekModels.ChatMessage> messages = buildSystemMessages();
+            List<DeepSeekModels.ContentPart> parts = new ArrayList<>();
+            parts.add(DeepSeekModels.ContentPart.text(prompt));
+            for (String image : imageUrls) {
+                parts.add(
+                    image.startsWith("file-api-")
+                        ? DeepSeekModels.ContentPart.fileId(image)
+                        : DeepSeekModels.ContentPart.imageUrl(image)
+                );
+            }
+            messages.add(
+                DeepSeekModels.ChatMessage.multimodal("user", parts)
+            );
+
+            DeepSeekModels.ChatRequest request = new DeepSeekModels.ChatRequest(
+                resolvedModel,
+                messages,
+                maxTokens
+            );
+            return client.sendPostRequest(
+                "/chat/completions",
+                request,
+                DeepSeekModels.ChatResponse.class
+            );
+        } catch (DeepSeekHTTPException e) {
+            throw new DeepSeekAPIException(
+                "Failed to send vision request",
+                e,
+                e.getStatusCode()
+            );
+        } catch (IOException e) {
+            throw new DeepSeekAPIException("Failed to send vision request", e);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -208,6 +308,18 @@ public class DeepSeekService implements Closeable {
                 logger.debug("Chat history size: {}", chatHistory.size());
             }
             return response;
+        } catch (DeepSeekHTTPException e) {
+            logger.error(
+                "Chat request failed for model {} with HTTP {}",
+                resolvedModel,
+                e.getStatusCode(),
+                e
+            );
+            throw new DeepSeekAPIException(
+                "Failed to send chat request",
+                e,
+                e.getStatusCode()
+            );
         } catch (IOException e) {
             logger.error("Chat request failed for model {}", resolvedModel, e);
             throw new DeepSeekAPIException("Failed to send chat request", e);
@@ -283,6 +395,18 @@ public class DeepSeekService implements Closeable {
                         fullReasoning.append(reasoning);
                     }
                 }
+            );
+        } catch (DeepSeekHTTPException e) {
+            logger.error(
+                "Streaming chat request failed for model {} with HTTP {}",
+                resolvedModel,
+                e.getStatusCode(),
+                e
+            );
+            throw new DeepSeekAPIException(
+                "Failed to stream chat request",
+                e,
+                e.getStatusCode()
             );
         } catch (IOException e) {
             logger.error(

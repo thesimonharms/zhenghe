@@ -37,6 +37,7 @@ ZhengHe wraps the DeepSeek HTTP API in an idiomatic Java interface. It handles a
   - [Configuring Token Limits](#configuring-token-limits)
   - [Custom System Prompt](#custom-system-prompt)
   - [Streaming Responses](#streaming-responses)
+  - [Vision (Image Input)](#vision-image-input)
   - [Clearing Chat History](#clearing-chat-history)
 - [Configuration Reference](#configuration-reference)
 - [API Reference](#api-reference)
@@ -50,7 +51,11 @@ ZhengHe wraps the DeepSeek HTTP API in an idiomatic Java interface. It handles a
 
 - **Stateful conversations** — automatic chat history tracking across multiple turns
 - **Single-turn completions** — fire-and-forget requests that don't affect history
+- **Vision support** — send images (base64, URL, or Files API) to `deepseek-v4-flash-vision-exp`
+- **Thinking mode** — capture `reasoning_content` in responses, streams, and history
 - **Model listing** — enumerate available models at runtime
+- **Typed errors** — HTTP status codes propagated through `DeepSeekAPIException` and `DeepSeekHTTPException`
+- **Context-cache aware** — `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` in usage stats
 - **Configurable** — customise token limits per request or globally
 - **Resource-safe** — `DeepSeekAPIClient` implements `Closeable`
 - **Logging** — SLF4J bridging; bring your own backend (Logback, Log4j 2, etc.)
@@ -84,7 +89,7 @@ Add the GitHub Packages repository and dependency to your `pom.xml`:
   <dependency>
     <groupId>com.simonharms</groupId>
     <artifactId>ZhengHe</artifactId>
-    <version>1.0.0</version>
+    <version>1.2.0</version>
   </dependency>
 </dependencies>
 ```
@@ -105,7 +110,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.simonharms:ZhengHe:1.0.0'
+    implementation 'com.simonharms:ZhengHe:1.2.0'
 }
 ```
 
@@ -213,12 +218,20 @@ DeepSeekService service = new DeepSeekService(props.getProperty("deepseek.api.ke
 
 ### Active Models
 
-The library ships with constants for the latest DeepSeek V4 models:
+The library ships with constants for the current DeepSeek V4 models:
 
 | Constant | Value | Description |
 |---|---|---|
-| `DeepSeekModels.DEEPSEEK_V4_FLASH` | `"deepseek-v4-flash"` | Fast and cost-effective — replaces all previous models |
-| `DeepSeekModels.DEEPSEEK_V4_PRO` | `"deepseek-v4-pro"` | Highest quality reasoning |
+| `DeepSeekModels.DEEPSEEK_V4_FLASH` | `"deepseek-v4-flash"` | Fast and cost-effective — replaces all previous models. 1M context. Thinking mode on by default |
+| `DeepSeekModels.DEEPSEEK_V4_PRO` | `"deepseek-v4-pro"` | Highest quality reasoning. Thinking mode on by default |
+| `DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP` | `"deepseek-v4-flash-vision-exp"` | Experimental — same as flash plus image input |
+
+You can also query the set at runtime:
+
+```java
+DeepSeekModels.getActiveModels().forEach(System.out::println);
+boolean vision = DeepSeekModels.supportsVision(DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP); // true
+```
 
 ### Deprecated Model Resolution
 
@@ -341,7 +354,9 @@ service.streamChatRequest("Write a haiku.", DeepSeekModels.DEEPSEEK_V4_FLASH, 64
 
 ### Thinking Mode (Chain-of-Thought Reasoning)
 
-The DeepSeek V4 Pro model supports **thinking mode** — it outputs a chain-of-thought reasoning trace before the final answer. Thinking mode is enabled by default for `deepseek-v4-pro`; you can control it explicitly via the request object.
+Both `deepseek-v4-flash` and `deepseek-v4-pro` support **thinking mode** — the model outputs a chain-of-thought reasoning trace before the final answer. Thinking mode is enabled by default with effort `high`; you can control it explicitly via the request object.
+
+Valid `reasoning_effort` values: `low`, `medium`, `high`, `xhigh`, `max`.
 
 ```java
 import com.simonharms.zhenghe.DeepSeekModels.ChatRequest.ThinkingConfig;
@@ -384,6 +399,42 @@ System.out.println("Reasoning: " + lastMsg.getReasoningContent());
 - `temperature`, `top_p`, `presence_penalty`, and `frequency_penalty` have no effect when thinking mode is enabled.
 - In multi-turn conversations **without tool calls**, `reasoning_content` from previous turns is automatically handled by the API — you don't need to manage it.
 - In multi-turn conversations **with tool calls**, the `reasoning_content` must be included in subsequent requests. Since ZhengHe preserves it in the chat history, this happens automatically when using `sendChatRequest` or `streamChatRequest`.
+
+### Vision (Image Input)
+
+`deepseek-v4-flash-vision-exp` accepts images alongside text. Images are allowed in `user` messages only, and only on the vision model — other models return HTTP 400. Three ways to supply an image:
+
+1. Base64 data URL — `data:image/jpeg;base64,...`
+2. External URL — `https://...` (max 8192 chars, image up to 32 MiB)
+3. Files API reference — `file-api-...` ID (image up to 64 MiB)
+
+`sendVisionRequest` is a single-turn call. It does not touch the chat history.
+
+```java
+service.sendVisionRequest(
+    "What is in this image?",
+    DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP,
+    2048,
+    List.of("data:image/jpeg;base64,<BASE64_DATA>")
+);
+```
+
+For full control, build a multimodal message yourself and send it as part of a `ChatRequest`:
+
+```java
+import com.simonharms.zhenghe.DeepSeekModels.ContentPart;
+
+List<ContentPart> parts = List.of(
+    ContentPart.text("Describe this chart."),
+    ContentPart.imageUrl("https://example.com/chart.png", "low"),
+    // or reference an upload: ContentPart.fileId("file-api-...")
+);
+List<ChatMessage> messages = List.of(
+    ChatMessage.multimodal("user", parts)
+);
+```
+
+Supported formats: JPEG, PNG, GIF, WebP. Per-image token cost is capped at 384. Detail levels: `low`, `high`, `original`, `auto`.
 
 ### Clearing Chat History
 
@@ -435,6 +486,7 @@ service.getChatHistory().forEach(msg ->
 | `streamChatRequest(message, model, maxTokens, onToken)` | Streams with a custom token limit |
 | `generateCompletion(prompt, model)` | Stateless single-turn request; history unchanged |
 | `generateCompletion(prompt, model, maxTokens)` | Stateless with custom token limit |
+| `sendVisionRequest(prompt, model, maxTokens, imageUrls)` | Single-turn vision request; history unchanged |
 | `getChatHistory()` | Returns a snapshot of the current history (unmodifiable) |
 | `clearChatHistory()` | Clears conversation history; system prompt unaffected |
 | `setSystemPrompt(String)` | Sets the system message prepended to every request |
@@ -457,7 +509,7 @@ service.getChatHistory().forEach(msg ->
 
 ## Error Handling
 
-All API errors throw `DeepSeekAPIException` (a checked exception). Where applicable, the HTTP status code is available via `getStatusCode()`.
+All API errors throw `DeepSeekAPIException` (a checked exception). When the API returned an HTTP error response, the status code is available via `getStatusCode()`.
 
 ```java
 try {
@@ -468,6 +520,34 @@ try {
     System.err.println("Cause:       " + e.getCause());
 }
 ```
+
+### HTTP Status Codes
+
+The low-level client throws `DeepSeekHTTPException` (extends `IOException`) for any non-2xx response. It carries the status code and the raw error body. Catch it before `IOException`:
+
+```java
+try {
+    service.sendChatRequest("Hello", DeepSeekModels.DEEPSEEK_V4_FLASH);
+} catch (DeepSeekAPIException e) {
+    if (e.getStatusCode() == 429) {
+        // rate limited — wait and retry
+    } else if (e.getStatusCode() == 402) {
+        // insufficient balance — top up at platform.deepseek.com
+    }
+}
+```
+
+Documented DeepSeek API status codes:
+
+| Status | Meaning | Typical fix |
+|---|---|---|
+| `400` | Invalid format | Fix the request body per the error hints |
+| `401` | Authentication failed | Check the API key |
+| `402` | Insufficient balance | Top up the account |
+| `422` | Invalid parameters | Fix the request parameters |
+| `429` | Rate limit reached | Slow down the request rate |
+| `500` | Server error | Retry after a brief wait |
+| `503` | Server overloaded | Retry after a brief wait |
 
 `ChatResponse.getMessage()` throws `IllegalStateException` if the API returns a malformed response (empty choices, null content, etc.).
 

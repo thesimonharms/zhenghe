@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +22,10 @@ class DeepSeekModelsTest {
     void activeModelConstants_areCorrect() {
         assertEquals("deepseek-v4-flash", DeepSeekModels.DEEPSEEK_V4_FLASH);
         assertEquals("deepseek-v4-pro", DeepSeekModels.DEEPSEEK_V4_PRO);
+        assertEquals(
+            "deepseek-v4-flash-vision-exp",
+            DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP
+        );
     }
 
     @Test
@@ -33,14 +38,13 @@ class DeepSeekModelsTest {
 
     @Test
     void resolveModel_passesThroughActiveModels() {
-        assertEquals(
-            DeepSeekModels.DEEPSEEK_V4_FLASH,
-            DeepSeekModels.resolveModel(DeepSeekModels.DEEPSEEK_V4_FLASH)
-        );
-        assertEquals(
-            DeepSeekModels.DEEPSEEK_V4_PRO,
-            DeepSeekModels.resolveModel(DeepSeekModels.DEEPSEEK_V4_PRO)
-        );
+        for (String active : DeepSeekModels.getActiveModels()) {
+            assertEquals(
+                active,
+                DeepSeekModels.resolveModel(active),
+                "Active model '" + active + "' should pass through unchanged"
+            );
+        }
     }
 
     @Test
@@ -75,17 +79,69 @@ class DeepSeekModelsTest {
 
     @Test
     void isDeprecated_returnsFalseForActiveModels() {
-        assertFalse(
-            DeepSeekModels.isDeprecated(DeepSeekModels.DEEPSEEK_V4_FLASH)
-        );
-        assertFalse(
-            DeepSeekModels.isDeprecated(DeepSeekModels.DEEPSEEK_V4_PRO)
-        );
+        for (String active : DeepSeekModels.getActiveModels()) {
+            assertFalse(
+                DeepSeekModels.isDeprecated(active),
+                "Active model '" + active + "' must not be deprecated"
+            );
+        }
     }
 
     @Test
     void isDeprecated_returnsFalseForUnknownModels() {
         assertFalse(DeepSeekModels.isDeprecated("unknown-model"));
+    }
+
+    @Test
+    void getActiveModels_containsAllCurrentModels() {
+        var models = DeepSeekModels.getActiveModels();
+        assertTrue(models.contains("deepseek-v4-flash"));
+        assertTrue(models.contains("deepseek-v4-pro"));
+        assertTrue(models.contains("deepseek-v4-flash-vision-exp"));
+        assertEquals(3, models.size());
+    }
+
+    @Test
+    void getActiveModels_returnsUnmodifiableSet() {
+        assertThrows(UnsupportedOperationException.class, () ->
+            DeepSeekModels.getActiveModels().add("new-active")
+        );
+    }
+
+    @Test
+    void isActive_identifiesActiveAndUnknownModels() {
+        assertTrue(DeepSeekModels.isActive(DeepSeekModels.DEEPSEEK_V4_FLASH));
+        assertTrue(DeepSeekModels.isActive(DeepSeekModels.DEEPSEEK_V4_PRO));
+        assertTrue(
+            DeepSeekModels.isActive(DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP)
+        );
+        assertFalse(DeepSeekModels.isActive("deepseek-chat"));
+        assertFalse(DeepSeekModels.isActive("unknown-model"));
+    }
+
+    @Test
+    void supportsVision_onlyVisionModelReturnsTrue() {
+        assertTrue(
+            DeepSeekModels.supportsVision(
+                DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP
+            )
+        );
+        assertFalse(
+            DeepSeekModels.supportsVision(DeepSeekModels.DEEPSEEK_V4_FLASH)
+        );
+        assertFalse(
+            DeepSeekModels.supportsVision(DeepSeekModels.DEEPSEEK_V4_PRO)
+        );
+        assertFalse(DeepSeekModels.supportsVision("deepseek-chat"));
+        assertFalse(DeepSeekModels.supportsVision(null));
+    }
+
+    @Test
+    void validReasoningEfforts_matchDocs() {
+        assertEquals(
+            Set.of("low", "medium", "high", "xhigh", "max"),
+            DeepSeekModels.VALID_REASONING_EFFORTS
+        );
     }
 
     @Test
@@ -252,6 +308,68 @@ class DeepSeekModelsTest {
         assertEquals("assistant", msg.getRole());
         assertEquals("Hi", msg.getContent());
         assertEquals("I thought about it", msg.getReasoningContent());
+    }
+
+    // --- ChatMessage (vision / multimodal) ---
+
+    @Test
+    void chatMessage_multimodalSerializesContentParts() throws Exception {
+        List<DeepSeekModels.ContentPart> parts = List.of(
+            DeepSeekModels.ContentPart.text("What is in this image?"),
+            DeepSeekModels.ContentPart.imageUrl("data:image/jpeg;base64,abc123")
+        );
+
+        DeepSeekModels.ChatMessage msg = DeepSeekModels.ChatMessage.multimodal(
+            "user",
+            parts
+        );
+        String json = mapper.writeValueAsString(msg);
+
+        assertTrue(json.contains("\"role\":\"user\""));
+        assertTrue(json.contains("\"type\":\"text\""));
+        assertTrue(json.contains("\"text\":\"What is in this image?\""));
+        assertTrue(json.contains("\"type\":\"image_url\""));
+        assertTrue(
+            json.contains("\"image_url\":{\"url\":\"data:image/jpeg;base64,abc123\"}"),
+            "Detail must be omitted when null: " + json
+        );
+    }
+
+    @Test
+    void chatMessage_multimodalSerializesDetailAndFileId() throws Exception {
+        List<DeepSeekModels.ContentPart> parts = List.of(
+            DeepSeekModels.ContentPart.imageUrl(
+                "https://example.com/img.png",
+                "low"
+            ),
+            DeepSeekModels.ContentPart.fileId("file-api-123")
+        );
+
+        DeepSeekModels.ChatMessage msg = DeepSeekModels.ChatMessage.multimodal(
+            "user",
+            parts
+        );
+        String json = mapper.writeValueAsString(msg);
+
+        assertTrue(
+            json.contains("\"image_url\":{\"url\":\"https://example.com/img.png\",\"detail\":\"low\"}"),
+            "Expected detail in JSON: " + json
+        );
+        assertTrue(json.contains("\"type\":\"file\""));
+        assertTrue(json.contains("\"file_id\":\"file-api-123\""));
+    }
+
+    @Test
+    void chatMessage_getContentReturnsNullForMultimodal() {
+        DeepSeekModels.ChatMessage msg = DeepSeekModels.ChatMessage.multimodal(
+            "user",
+            List.of(DeepSeekModels.ContentPart.text("hi"))
+        );
+
+        assertNull(msg.getContent());
+        assertEquals(1, msg.getContentParts().size());
+        assertEquals("text", msg.getContentParts().get(0).getType());
+        assertEquals("user", msg.getRole());
     }
 
     // --- ChatRequest (thinking mode) ---
@@ -421,6 +539,33 @@ class DeepSeekModelsTest {
         DeepSeekModels.ChatStreamChunk chunk =
             new DeepSeekModels.ChatStreamChunk();
         assertNull(chunk.getContent());
+    }
+
+    // --- Usage (context caching) ---
+
+    @Test
+    void usage_deserializesCacheTokenFields() throws Exception {
+        String json = """
+            {
+              "completion_tokens": 5,
+              "prompt_tokens": 100,
+              "total_tokens": 105,
+              "prompt_cache_hit_tokens": 64,
+              "prompt_cache_miss_tokens": 36
+            }
+            """;
+
+        DeepSeekModels.ChatResponse response = mapper.readValue(
+            "{\"usage\":" +
+                json.replace("\n", " ").trim() +
+                "}",
+            DeepSeekModels.ChatResponse.class
+        );
+
+        assertEquals(105, response.getUsage().getTotalTokens());
+        assertEquals(64, response.getUsage().getPromptCacheHitTokens());
+        assertEquals(36, response.getUsage().getPromptCacheMissTokens());
+        assertEquals(100, response.getUsage().getPromptTokens());
     }
 
     // --- ChatStreamChunk (thinking mode) ---

@@ -114,8 +114,10 @@ public class DeepSeekAPIClient implements Closeable {
                     response.code(),
                     response.message()
                 );
-                throw new IOException(
-                    "GET request failed [" + response.code() + "]: " + body
+                throw new DeepSeekHTTPException(
+                    "GET request failed [" + response.code() + "]: " + body,
+                    response.code(),
+                    body
                 );
             }
         }
@@ -168,11 +170,13 @@ public class DeepSeekAPIClient implements Closeable {
                     response.message(),
                     responseBody
                 );
-                throw new IOException(
+                throw new DeepSeekHTTPException(
                     "POST request failed [" +
                         response.code() +
                         "]: " +
-                        responseBody
+                        responseBody,
+                    response.code(),
+                    responseBody
                 );
             }
         }
@@ -224,11 +228,13 @@ public class DeepSeekAPIClient implements Closeable {
                     response.code(),
                     response.message()
                 );
-                throw new IOException(
+                throw new DeepSeekHTTPException(
                     "Streaming request failed [" +
                         response.code() +
                         "]: " +
-                        errorBody
+                        errorBody,
+                    response.code(),
+                    errorBody
                 );
             }
 

@@ -327,6 +327,63 @@ class DeepSeekServiceTest {
     }
 
     @Test
+    void sendChatRequest_httpError_propagatesStatusCode() throws Exception {
+        when(mockClient.sendPostRequest(anyString(), any(), any())).thenThrow(
+            new DeepSeekHTTPException("POST failed [429]: rate limited", 429, "rate limited")
+        );
+
+        DeepSeekAPIException ex = assertThrows(
+            DeepSeekAPIException.class,
+            () -> service.sendChatRequest("Hello", "deepseek-chat")
+        );
+
+        assertEquals(429, ex.getStatusCode());
+    }
+
+    @Test
+    void generateCompletion_httpError_propagatesStatusCode() throws Exception {
+        when(mockClient.sendPostRequest(anyString(), any(), any())).thenThrow(
+            new DeepSeekHTTPException("POST failed [402]: no balance", 402, "")
+        );
+
+        DeepSeekAPIException ex = assertThrows(
+            DeepSeekAPIException.class,
+            () -> service.generateCompletion("Hi", "deepseek-chat")
+        );
+
+        assertEquals(402, ex.getStatusCode());
+    }
+
+    @Test
+    void getModels_httpError_propagatesStatusCode() throws Exception {
+        when(mockClient.sendGetRequest(anyString(), any())).thenThrow(
+            new DeepSeekHTTPException("GET failed [401]: bad key", 401, "")
+        );
+
+        DeepSeekAPIException ex = assertThrows(
+            DeepSeekAPIException.class,
+            () -> service.getModels()
+        );
+
+        assertEquals(401, ex.getStatusCode());
+    }
+
+    @Test
+    void streamChatRequest_httpError_propagatesStatusCode() throws Exception {
+        doThrow(
+            new DeepSeekHTTPException("Streaming failed [503]", 503, "overloaded")
+        )
+            .when(mockClient)
+            .sendStreamingPostRequest(anyString(), any(), any());
+
+        DeepSeekAPIException ex = assertThrows(DeepSeekAPIException.class, () ->
+            service.streamChatRequest("Hi", "deepseek-chat", 100, t -> {})
+        );
+
+        assertEquals(503, ex.getStatusCode());
+    }
+
+    @Test
     void sendChatRequest_multiTurn_accumulatesHistory() throws Exception {
         when(
             mockClient.sendPostRequest(
@@ -520,6 +577,92 @@ class DeepSeekServiceTest {
         assertThrows(DeepSeekAPIException.class, () ->
             service.streamChatRequest("Hi", "deepseek-chat", 100, t -> {})
         );
+    }
+
+    // --- vision ---
+
+    @Test
+    void sendVisionRequest_buildsMultimodalRequest() throws Exception {
+        when(
+            mockClient.sendPostRequest(
+                eq("/chat/completions"),
+                any(),
+                eq(DeepSeekModels.ChatResponse.class)
+            )
+        ).thenReturn(buildChatResponse("A cat"));
+
+        service.sendVisionRequest(
+            "What is in this image?",
+            DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP,
+            512,
+            List.of("data:image/jpeg;base64,abc")
+        );
+
+        ArgumentCaptor<DeepSeekModels.ChatRequest> captor =
+            ArgumentCaptor.forClass(DeepSeekModels.ChatRequest.class);
+        verify(mockClient).sendPostRequest(
+            eq("/chat/completions"),
+            captor.capture(),
+            eq(DeepSeekModels.ChatResponse.class)
+        );
+
+        DeepSeekModels.ChatRequest request = captor.getValue();
+        assertEquals(
+            DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP,
+            request.getModel()
+        );
+        List<DeepSeekModels.ChatMessage> msgs = request.getMessages();
+        DeepSeekModels.ChatMessage userMsg = msgs.get(msgs.size() - 1);
+        assertEquals("user", userMsg.getRole());
+        List<DeepSeekModels.ContentPart> parts = userMsg.getContentParts();
+        assertEquals(2, parts.size());
+        assertEquals("text", parts.get(0).getType());
+        assertEquals("image_url", parts.get(1).getType());
+    }
+
+    @Test
+    void sendVisionRequest_rejectsNonVisionModel() {
+        assertThrows(DeepSeekAPIException.class, () ->
+            service.sendVisionRequest(
+                "describe",
+                DeepSeekModels.DEEPSEEK_V4_FLASH,
+                512,
+                List.of("https://example.com/i.png")
+            )
+        );
+        verifyNoInteractions(mockClient);
+    }
+
+    @Test
+    void sendVisionRequest_rejectsEmptyImageList() {
+        assertThrows(IllegalArgumentException.class, () ->
+            service.sendVisionRequest(
+                "What is this?",
+                DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP,
+                512,
+                List.of()
+            )
+        );
+    }
+
+    @Test
+    void sendVisionRequest_keepsOutOfChatHistory() throws Exception {
+        when(
+            mockClient.sendPostRequest(
+                eq("/chat/completions"),
+                any(),
+                eq(DeepSeekModels.ChatResponse.class)
+            )
+        ).thenReturn(buildChatResponse("A cat"));
+
+        service.sendVisionRequest(
+            "What is this?",
+            DeepSeekModels.DEEPSEEK_V4_FLASH_VISION_EXP,
+            512,
+            List.of("data:image/png;base64,xyz")
+        );
+
+        assertTrue(service.getChatHistory().isEmpty());
     }
 
     // --- clearChatHistory ---

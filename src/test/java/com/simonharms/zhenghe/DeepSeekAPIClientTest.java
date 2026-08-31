@@ -103,6 +103,27 @@ class DeepSeekAPIClientTest {
     }
 
     @Test
+    void sendGetRequest_nonSuccessCode_throwsHTTPExceptionWithStatus() {
+        server.enqueue(
+            new MockResponse()
+                .setResponseCode(402)
+                .setBody("{\"err\":{\"msg\":\"Insufficient Balance\"}}")
+        );
+
+        DeepSeekHTTPException ex = assertThrows(
+            DeepSeekHTTPException.class,
+            () ->
+                client.sendGetRequest(
+                    "/models",
+                    DeepSeekModels.ModelResponse.class
+                )
+        );
+
+        assertEquals(402, ex.getStatusCode());
+        assertTrue(ex.getResponseBody().contains("Insufficient Balance"));
+    }
+
+    @Test
     void sendGetRequest_serverError_throwsIOException() {
         server.enqueue(
             new MockResponse()
@@ -209,6 +230,59 @@ class DeepSeekAPIClientTest {
         );
     }
 
+    @Test
+    void sendPostRequest_rateLimit_throwsHTTPExceptionWithStatus429() {
+        server.enqueue(
+            new MockResponse().setResponseCode(429).setBody("rate limited")
+        );
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "test"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest(
+            "deepseek-chat",
+            messages,
+            10
+        );
+
+        DeepSeekHTTPException ex = assertThrows(
+            DeepSeekHTTPException.class,
+            () ->
+                client.sendPostRequest(
+                    "/chat/completions",
+                    requestBody,
+                    DeepSeekModels.ChatResponse.class
+                )
+        );
+
+        assertEquals(429, ex.getStatusCode());
+        assertTrue(ex.isRateLimited());
+    }
+
+    @Test
+    void sendPostRequest_serverOverloaded_throws503() {
+        server.enqueue(new MockResponse().setResponseCode(503).setBody("busy"));
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "test"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest(
+            "deepseek-chat",
+            messages,
+            10
+        );
+
+        DeepSeekHTTPException ex = assertThrows(
+            DeepSeekHTTPException.class,
+            () ->
+                client.sendPostRequest(
+                    "/chat/completions",
+                    requestBody,
+                    DeepSeekModels.ChatResponse.class
+                )
+        );
+
+        assertEquals(503, ex.getStatusCode());
+    }
+
     // --- Streaming ---
 
     @Test
@@ -301,6 +375,34 @@ class DeepSeekAPIClientTest {
                 chunk -> {}
             )
         );
+    }
+
+    @Test
+    void sendStreamingPostRequest_serverError_preservesStatus() {
+        server.enqueue(
+            new MockResponse().setResponseCode(503).setBody("overloaded")
+        );
+
+        List<DeepSeekModels.ChatMessage> messages = new ArrayList<>();
+        messages.add(new DeepSeekModels.ChatMessage("user", "Hi"));
+        DeepSeekModels.ChatRequest requestBody = new DeepSeekModels.ChatRequest(
+            "deepseek-chat",
+            messages,
+            10
+        );
+        requestBody.setStream(true);
+
+        DeepSeekHTTPException ex = assertThrows(
+            DeepSeekHTTPException.class,
+            () ->
+                client.sendStreamingPostRequest(
+                    "/chat/completions",
+                    requestBody,
+                    chunk -> {}
+                )
+        );
+
+        assertEquals(503, ex.getStatusCode());
     }
 
     @Test
